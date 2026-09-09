@@ -1,0 +1,187 @@
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from app.auth import CurrentUser, require_hr_admin
+
+from app.services.assessment_service import (
+    create_assessment,
+    get_assessment_by_token,
+    submit_assessment,
+    get_assessment_result,
+)
+
+router = APIRouter(
+    prefix="/assessments",
+    tags=["assessments"],
+)
+
+
+# =========================================================
+# HR — CREATE ASSESSMENT
+# =========================================================
+
+@router.post("/{application_id}/create")
+async def create_candidate_assessment(
+    application_id: str,
+    user: CurrentUser = Depends(require_hr_admin),
+):
+
+    try:
+
+        result = create_assessment(
+            application_id
+        )
+
+        return {
+            "message": "Assessment created successfully",
+
+            "assessment_id": (
+                result["assessment"][
+                    "assessment_id"
+                ]
+            ),
+
+            "candidate_name": (
+                result["candidate_name"]
+            ),
+
+            "candidate_email": (
+                result["candidate_email"]
+            ),
+
+            "assessment_url": (
+                result["assessment_url"]
+            ),
+
+            "expires_at": (
+                result["expires_at"]
+            ),
+        }
+
+    except RuntimeError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to create assessment: "
+                f"{str(e)}"
+            ),
+        )
+
+# =========================================================
+# HR — GET ASSESSMENT RESULT
+# =========================================================
+
+@router.get("/{application_id}/result")
+async def get_candidate_assessment_result(
+    application_id: str,
+    user: CurrentUser = Depends(require_hr_admin),
+):
+
+    try:
+
+        result = get_assessment_result(
+            application_id
+        )
+
+        return result
+
+    except RuntimeError as e:
+
+        raise HTTPException(
+            status_code=404,
+            detail=str(e),
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to load assessment result: "
+                f"{str(e)}"
+            ),
+        )
+    
+
+# =========================================================
+# CANDIDATE — GET ASSESSMENT
+# =========================================================
+
+@router.get("/access/{token}")
+async def get_candidate_assessment(
+    token: str,
+):
+
+    try:
+
+        result = get_assessment_by_token(
+            token
+        )
+
+        return result
+
+    except RuntimeError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to load assessment: "
+                f"{str(e)}"
+            ),
+        )
+    
+# =========================================================
+# CANDIDATE — SUBMIT ASSESSMENT
+# =========================================================
+
+class AssessmentSubmission(BaseModel):
+    answers: list[str | None]
+
+
+@router.post("/access/{token}/submit")
+async def submit_candidate_assessment(
+    token: str,
+    submission: AssessmentSubmission,
+):
+
+    try:
+
+        result = submit_assessment(
+            token=token,
+            answers=submission.answers,
+        )
+
+        return result
+
+    except RuntimeError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to submit assessment: "
+                f"{str(e)}"
+            ),
+        )
+
