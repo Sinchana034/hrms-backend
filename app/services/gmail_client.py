@@ -1,10 +1,16 @@
+import base64
 import time
 from datetime import datetime, timezone
+
+
+from email.message import EmailMessage
 
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+
+
 
 from app.config import get_settings
 from app.services.crypto import decrypt, encrypt
@@ -13,7 +19,10 @@ from app.services.crypto import decrypt, encrypt
 # is deliberately minimal — this system never sends from the HR mailbox
 # via Gmail (candidate emails go out through the dedicated dispatch
 # provider, Section 8), it only reads inbound applications.
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 
 
 def _flow() -> Flow:
@@ -149,3 +158,41 @@ def get_attachment_bytes(creds: Credentials, message_id: str, attachment_id: str
 
 def now_unix() -> int:
     return int(time.time())
+
+def send_email(
+    creds: Credentials,
+    to_email: str,
+    subject: str,
+    body: str,
+):
+    """Send an email using the Gmail API."""
+
+    message = EmailMessage()
+
+    message["To"] = to_email
+    message["Subject"] = subject
+
+    message.set_content(body)
+
+    encoded_message = base64.urlsafe_b64encode(
+        message.as_bytes()
+    ).decode()
+
+    service = build(
+        "gmail",
+        "v1",
+        credentials=creds,
+    )
+
+    return (
+        service
+        .users()
+        .messages()
+        .send(
+            userId="me",
+            body={
+                "raw": encoded_message
+            },
+        )
+        .execute()
+    )

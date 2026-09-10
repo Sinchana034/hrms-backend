@@ -1,8 +1,8 @@
-import smtplib
-
-from email.message import EmailMessage
-
-from app.config import get_settings
+from app.database import get_service_client
+from app.services.gmail_client import (
+    load_credentials,
+    send_email,
+)
 
 
 def send_candidate_notification(
@@ -13,32 +13,35 @@ def send_candidate_notification(
     body: str,
 ):
     """
-    Send a recruitment status notification email to a candidate.
-
-    This uses the same SMTP configuration as assessment emails.
+    Send a recruitment status notification using Gmail API.
     """
 
-    settings = get_settings()
+    try:
+        client = get_service_client()
 
-    smtp_host = settings.smtp_host
-    smtp_port = settings.smtp_port
-    smtp_username = settings.smtp_username
-    smtp_password = settings.smtp_password
-    from_email = settings.email_from or smtp_username
-
-    if not smtp_username or not smtp_password:
-        raise RuntimeError(
-            "SMTP email configuration is missing"
+        # Get the connected Gmail account
+        result = (
+            client
+            .table("email_accounts")
+            .select("*")
+            .eq("provider", "gmail")
+            .execute()
         )
 
-    message = EmailMessage()
+        if not result.data:
+            raise RuntimeError(
+                "No Gmail account connected."
+            )
 
-    message["Subject"] = subject
-    message["From"] = from_email
-    message["To"] = candidate_email
+        account = result.data[0]
 
-    message.set_content(
-        f"""
+        # Load stored OAuth credentials
+        creds, was_refreshed = load_credentials(
+            account
+        )
+
+        # Send candidate notification
+        email_body = f"""
 Hello {candidate_name},
 
 {body}
@@ -46,25 +49,36 @@ Hello {candidate_name},
 Position: {position}
 
 Regards,
-
 HRMS Recruitment Team
 """
-    )
 
-    try:
-        with smtplib.SMTP(
-            smtp_host,
-            smtp_port
-        ) as server:
+        send_email(
+            creds=creds,
+            to_email=candidate_email,
+            subject=subject,
+            body=email_body,
+        )
 
-            server.starttls()
+        # Save refreshed access token if needed
+        if was_refreshed:
+            from app.services.crypto import encrypt
 
-            server.login(
-                smtp_username,
-                smtp_password
+            (
+                client
+                .table("email_accounts")
+                .update(
+                    {
+                        "access_token_encrypted": encrypt(
+                            creds.token
+                        )
+                    }
+                )
+                .eq(
+                    "id",
+                    account["id"]
+                )
+                .execute()
             )
-
-            server.send_message(message)
 
     except Exception as e:
         raise RuntimeError(
