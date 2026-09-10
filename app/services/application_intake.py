@@ -5,6 +5,7 @@ from app.services.audit import write_audit_log
 from app.services.duplicate_detection import run_duplicate_check
 from app.services.resume_parser import parse_resume
 from app.services.storage import download_resume
+from app.services.candidate_notification import send_candidate_notification
 
 logger = logging.getLogger(__name__)
 
@@ -141,5 +142,34 @@ def create_application(row: dict) -> dict:
                 application_id,
                 exc_info=True,
             )
+
+    # ---------------------------------------------------------
+    # 6. Send application confirmation email
+    # ---------------------------------------------------------
+
+    try:
+        send_candidate_notification(
+            candidate_name=created["candidate_name"],
+            candidate_email=created["email"],
+            position=created["position"],
+            subject="Application Received",
+            body=(
+                "Thank you for submitting your application. "
+                "We have successfully received it and our recruitment "
+                "team will review your application."
+            ),
+        )
+
+        logger.info(
+            "Application confirmation email sent to %s",
+            created["email"],
+        )
+
+    except Exception:
+        logger.warning(
+            "Failed to send confirmation email to %s",
+            created["email"],
+            exc_info=True,
+        )
 
     return created
