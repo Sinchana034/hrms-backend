@@ -74,7 +74,7 @@ async def upload_resume_file(
 
     # ✅ ADD THIS
     return {
-        "resume_url": storage_path
+    "resume_path": storage_path
     }
 # ============================================================
 # PUBLIC - SUBMIT APPLICATION
