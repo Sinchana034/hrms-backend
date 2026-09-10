@@ -620,4 +620,4 @@ def get_final_selection(application_id: str):
             "Final selection not found"
         )
 
-    return result.data[0]
+    return result.data

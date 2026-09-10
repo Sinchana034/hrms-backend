@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.auth import CurrentUser, require_hr_admin
 from app.config import get_settings
@@ -43,6 +43,7 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 async def upload_resume_file(
     request: Request,
     file: UploadFile = File(...),
+    captcha_token: str = Form(...),
 ):
     """
     Upload candidate resume to private Supabase storage.
@@ -53,7 +54,20 @@ async def upload_resume_file(
         DOCX
 
     Maximum size is validated by storage service.
+
+    NOTE on captcha_token: this does NOT call verify_captcha() against the
+    provider — Turnstile/reCAPTCHA tokens are single-use, and the real
+    verification already happens once in submit_application() below. We
+    only check that a token was actually supplied, which is enough to stop
+    anonymous scripts that never load the widget at all from flooding
+    storage, without burning the token before the real submit.
     """
+
+    if not captcha_token:
+        raise HTTPException(
+            status_code=400,
+            detail="CAPTCHA verification required.",
+        )
 
     content = await file.read()
 
@@ -74,11 +88,6 @@ async def upload_resume_file(
             status_code=422,
             detail=str(e),
         )
-
-    return {
-        "resume_path": storage_path
-    }
-
 
 # ============================================================
 # PUBLIC - SUBMIT APPLICATION
