@@ -168,7 +168,7 @@ def create_assessment(application_id):
     # Candidate assessment URL
     # -----------------------------------------------------
 
-    frontend_url =  "http://localhost:5173"
+    frontend_url = "https://hrms-frontend-snowy-three.vercel.app"
 
     assessment_url = (
         f"{frontend_url}/assessment/{raw_token}"
