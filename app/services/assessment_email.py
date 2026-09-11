@@ -1,8 +1,4 @@
-import smtplib
-
-from email.message import EmailMessage
-
-from app.config import get_settings
+from app.services import gmail_client
 
 
 def send_assessment_email(
@@ -13,33 +9,20 @@ def send_assessment_email(
     expires_at,
 ):
     """
-    Send assessment invitation email to candidate.
+    Send assessment invitation email to candidate, via the Gmail API using
+    the connected HR mailbox (Section 6.2). Switched from SMTP because
+    outbound SMTP ports are blocked on our hosting platform's free tier —
+    the Gmail API is HTTPS-based and unaffected.
     """
 
-    settings = get_settings()
+    try:
+        creds, account_email = gmail_client.get_ready_credentials("gmail")
+    except RuntimeError:
+        raise
 
-    smtp_host = settings.smtp_host
-    smtp_port = settings.smtp_port
-    smtp_username = settings.smtp_username
-    smtp_password = settings.smtp_password
-    from_email = settings.email_from or smtp_username
+    subject = f"Assessment Invitation - {position}"
 
-    if not smtp_username or not smtp_password:
-        raise RuntimeError(
-            "SMTP email configuration is missing"
-        )
-
-    message = EmailMessage()
-
-    message["Subject"] = (
-        f"Assessment Invitation - {position}"
-    )
-
-    message["From"] = from_email
-    message["To"] = candidate_email
-
-    message.set_content(
-        f"""
+    body = f"""
 Hello {candidate_name},
 
 Congratulations!
@@ -63,23 +46,15 @@ Good luck!
 
 HRMS Recruitment Team
 """
-    )
 
     try:
-        with smtplib.SMTP(
-            smtp_host,
-            smtp_port
-        ) as server:
-
-            server.starttls()
-
-            server.login(
-                smtp_username,
-                smtp_password
-            )
-
-            server.send_message(message)
-
+        gmail_client.send_email_message(
+            creds,
+            from_email=account_email,
+            to_email=candidate_email,
+            subject=subject,
+            body_text=body,
+        )
     except Exception as e:
         raise RuntimeError(
             f"Failed to send assessment email: {str(e)}"

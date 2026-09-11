@@ -1,8 +1,4 @@
-from app.database import get_service_client
-from app.services.gmail_client import (
-    load_credentials,
-    send_email,
-)
+from app.services import gmail_client
 
 
 def send_candidate_notification(
@@ -13,35 +9,18 @@ def send_candidate_notification(
     body: str,
 ):
     """
-    Send a recruitment status notification using Gmail API.
+    Send a recruitment status notification email to a candidate, via the
+    Gmail API using the connected HR mailbox (Section 6.2). Switched from
+    SMTP because outbound SMTP ports are blocked on our hosting
+    platform's free tier — the Gmail API is HTTPS-based and unaffected.
     """
 
     try:
-        client = get_service_client()
+        creds, account_email = gmail_client.get_ready_credentials("gmail")
+    except RuntimeError:
+        raise
 
-        # Get the connected Gmail account
-        result = (
-            client
-            .table("email_accounts")
-            .select("*")
-            .eq("provider", "gmail")
-            .execute()
-        )
-
-        if not result.data:
-            raise RuntimeError(
-                "No Gmail account connected."
-            )
-
-        account = result.data[0]
-
-        # Load stored OAuth credentials
-        creds, was_refreshed = load_credentials(
-            account
-        )
-
-        # Send candidate notification
-        email_body = f"""
+    message_body = f"""
 Hello {candidate_name},
 
 {body}
@@ -49,37 +28,18 @@ Hello {candidate_name},
 Position: {position}
 
 Regards,
+
 HRMS Recruitment Team
 """
 
-        send_email(
-            creds=creds,
+    try:
+        gmail_client.send_email_message(
+            creds,
+            from_email=account_email,
             to_email=candidate_email,
             subject=subject,
-            body=email_body,
+            body_text=message_body,
         )
-
-        # Save refreshed access token if needed
-        if was_refreshed:
-            from app.services.crypto import encrypt
-
-            (
-                client
-                .table("email_accounts")
-                .update(
-                    {
-                        "access_token_encrypted": encrypt(
-                            creds.token
-                        )
-                    }
-                )
-                .eq(
-                    "id",
-                    account["id"]
-                )
-                .execute()
-            )
-
     except Exception as e:
         raise RuntimeError(
             f"Failed to send candidate notification email: {str(e)}"

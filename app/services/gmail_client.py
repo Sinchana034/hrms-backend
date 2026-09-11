@@ -1,8 +1,6 @@
 import base64
 import time
 from datetime import datetime, timezone
-
-
 from email.message import EmailMessage
 
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -10,15 +8,18 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
-
-
 from app.config import get_settings
+from app.database import get_service_client
 from app.services.crypto import decrypt, encrypt
 
-# Section 6.2: HR mailbox connected via Gmail API (OAuth2). Read-only scope
-# is deliberately minimal — this system never sends from the HR mailbox
-# via Gmail (candidate emails go out through the dedicated dispatch
-# provider, Section 8), it only reads inbound applications.
+# Section 6.2 (updated): HR mailbox connected via Gmail API (OAuth2).
+# Originally read-only — this scope now also includes gmail.send so the
+# system can dispatch candidate-facing emails (status updates, assessment
+# invites) through the same connected mailbox, since outbound SMTP is
+# blocked on our hosting platform's free tier. Any account connected
+# before this change was granted the read-only scope only; Google will
+# reject send calls for it with a 403 until the HR admin disconnects and
+# reconnects the mailbox to re-consent under the wider scope.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
@@ -159,40 +160,80 @@ def get_attachment_bytes(creds: Credentials, message_id: str, attachment_id: str
 def now_unix() -> int:
     return int(time.time())
 
-def send_email(
+
+def get_active_account(provider: str = "gmail") -> dict | None:
+    client = get_service_client()
+    result = (
+        client.table("email_accounts")
+        .select("*")
+        .eq("provider", provider)
+        .eq("is_active", True)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def get_ready_credentials(provider: str = "gmail") -> tuple[Credentials, str]:
+    """
+    Loads credentials for the active connected mailbox, refreshing and
+    persisting the access token if it's expired. Returns (credentials,
+    account_email). Raises RuntimeError if no mailbox is connected —
+    callers (candidate_notification, assessment_email) surface this as a
+    clear "no mailbox connected" error rather than a raw exception.
+    """
+    account = get_active_account(provider)
+    if not account:
+        raise RuntimeError(
+            f"No {provider} mailbox is connected. An HR admin needs to "
+            "connect one under Email Tracking before candidate emails can "
+            "be sent."
+        )
+
+    creds, was_refreshed = load_credentials(account)
+
+    if was_refreshed:
+        client = get_service_client()
+        client.table("email_accounts").update(
+            {
+                "access_token_encrypted": encrypt(creds.token),
+                "token_expires_at": creds.expiry.replace(tzinfo=timezone.utc).isoformat()
+                if creds.expiry
+                else None,
+            }
+        ).eq("account_id", account["account_id"]).execute()
+
+    return creds, account["account_email"]
+
+
+def send_email_message(
     creds: Credentials,
+    from_email: str,
     to_email: str,
     subject: str,
-    body: str,
-):
-    """Send an email using the Gmail API."""
+    body_text: str,
+) -> dict:
+    """
+    Sends a plain-text email through the Gmail API using the given
+    credentials. Raises the underlying googleapiclient HttpError on
+    failure (e.g. 403 if the connected account only has the older
+    read-only scope) — callers wrap this in a RuntimeError with a clearer
+    message.
+    """
+    service = build("gmail", "v1", credentials=creds)
 
     message = EmailMessage()
-
-    message["To"] = to_email
     message["Subject"] = subject
+    message["From"] = from_email
+    message["To"] = to_email
+    message.set_content(body_text)
 
-    message.set_content(body)
-
-    encoded_message = base64.urlsafe_b64encode(
-        message.as_bytes()
-    ).decode()
-
-    service = build(
-        "gmail",
-        "v1",
-        credentials=creds,
-    )
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
     return (
-        service
-        .users()
+        service.users()
         .messages()
-        .send(
-            userId="me",
-            body={
-                "raw": encoded_message
-            },
-        )
+        .send(userId="me", body={"raw": raw})
         .execute()
     )
