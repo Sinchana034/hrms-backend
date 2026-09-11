@@ -178,27 +178,31 @@ def create_assessment(application_id):
     # Send assessment email
     # -----------------------------------------------------
 
-    send_assessment_email(
-        candidate_name=application["candidate_name"],
-        candidate_email=application["email"],
-        position=application["position"],
-        assessment_url=assessment_url,
-        expires_at=expires_at,
-    )
+    try:
+        send_assessment_email(
+            candidate_name=application["candidate_name"],
+            candidate_email=application["email"],
+            position=application["position"],
+            assessment_url=assessment_url,
+            expires_at=expires_at,
+        )
 
-    # -----------------------------------------------------
-    # Return
-    # -----------------------------------------------------
+    except Exception as e:
+        print("Failed to send assessment email:", str(e))
 
-    return {
-        "assessment": assessment,
-        "access_token": raw_token,
-        "assessment_url": assessment_url,
-        "expires_at": expires_at,
-        "candidate_name": application["candidate_name"],
-        "candidate_email": application["email"],
-        "position": application["position"],
-    }
+        # -----------------------------------------------------
+        # Return
+        # -----------------------------------------------------
+
+        return {
+            "assessment": assessment,
+            "access_token": raw_token,
+            "assessment_url": assessment_url,
+            "expires_at": expires_at,
+            "candidate_name": application["candidate_name"],
+            "candidate_email": application["email"],
+            "position": application["position"],
+        }
 
 
 # =========================================================
