@@ -143,6 +143,7 @@ async def make_shortlisting_decision(
     user: CurrentUser = Depends(require_hr_admin),
 ):
     try:
+
         result = save_decision(
             application_id=application_id,
             decision=payload.decision,
@@ -159,7 +160,23 @@ async def make_shortlisting_decision(
         return result
 
     except ValueError as e:
+
         raise HTTPException(
             status_code=400,
+            detail=str(e),
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+
+        print(
+            "SHORTLISTING ERROR:",
+            str(e)
+        )
+
+        raise HTTPException(
+            status_code=500,
             detail=str(e),
         )
