@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_oauth_redirect_uri: str = "http://localhost:8000/email-sync/gmail/callback"
     oauth_state_secret: str = ""  # falls back to supabase_jwt_secret if unset
-    frontend_url: str = "http://localhost:5173"  # where /gmail/callback redirects after connecting
+    frontend_url: str = "https://hrms-frontend-snowy-three.vercel.app"  # where /gmail/callback redirects after connecting
 
     # Section 10 — bounce/complaint webhook (SendGrid event webhook format)
     sendgrid_webhook_verification_key: str = ""  # optional, skip signature check if unset
