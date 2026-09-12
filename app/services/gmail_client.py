@@ -38,7 +38,19 @@ def _flow() -> Flow:
         }
     }
     return Flow.from_client_config(
-        client_config, scopes=SCOPES, redirect_uri=settings.google_oauth_redirect_uri
+        client_config,
+        scopes=SCOPES,
+        redirect_uri=settings.google_oauth_redirect_uri,
+        # A new Flow instance is built here and again in
+        # exchange_code_for_credentials() — they're separate requests
+        # with no shared state. google-auth-oauthlib auto-generates a
+        # PKCE code_verifier per-instance by default, so the verifier
+        # from the auth-url step is never available at token-exchange
+        # time, causing Google to reject with "Missing code verifier".
+        # This is a confidential server-side client (has a client_secret)
+        # so PKCE isn't required by Google here; disabling auto-generation
+        # avoids sending a code_challenge in the first place.
+        autogenerate_code_verifier=False,
     )
 
 
