@@ -219,6 +219,47 @@ def get_ready_credentials(provider: str = "gmail") -> tuple[Credentials, str]:
     return creds, account["account_email"]
 
 
+def send_email_with_attachment(
+    creds: Credentials,
+    from_email: str,
+    to_email: str,
+    subject: str,
+    body_text: str,
+    attachment_bytes: bytes,
+    attachment_filename: str,
+    attachment_mimetype: str = "application/pdf",
+) -> dict:
+    """
+    Same as send_email_message, but with a single file attachment
+    (e.g. an offer letter PDF). maintype/subtype are split from
+    attachment_mimetype (default application/pdf).
+    """
+    service = build("gmail", "v1", credentials=creds)
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_email
+    message["To"] = to_email
+    message.set_content(body_text)
+
+    maintype, _, subtype = attachment_mimetype.partition("/")
+    message.add_attachment(
+        attachment_bytes,
+        maintype=maintype or "application",
+        subtype=subtype or "octet-stream",
+        filename=attachment_filename,
+    )
+
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+    return (
+        service.users()
+        .messages()
+        .send(userId="me", body={"raw": raw})
+        .execute()
+    )
+
+
 def send_email_message(
     creds: Credentials,
     from_email: str,

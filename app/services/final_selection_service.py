@@ -1,4 +1,5 @@
 from app.database import get_service_client
+from app.services.candidate_notification import send_candidate_notification
 
 
 # =========================================================
@@ -215,6 +216,61 @@ def calculate_final_selection(
             "Failed to save final selection"
         )
 
+    # -----------------------------------------------------
+    # Notify candidate of final decision
+    #
+    # This was previously missing entirely — the final
+    # selection was saved to the DB but no email was ever
+    # sent, unlike the shortlisting stage which already does
+    # this. A send failure must not undo the saved decision.
+    # -----------------------------------------------------
+
+    if prediction == "Selected":
+
+        subject = (
+            f"Congratulations - {application['position']}"
+        )
+
+        body = (
+            "Congratulations!\n\n"
+            "We are pleased to inform you that you have been "
+            "selected for this position.\n\n"
+            "Our HR team will be in touch shortly with your "
+            "offer letter and next steps."
+        )
+
+    else:
+
+        subject = (
+            f"Application Update - {application['position']}"
+        )
+
+        body = (
+            "Thank you for completing our full recruitment "
+            "process.\n\n"
+            "After careful consideration, we will not be moving "
+            "forward with your application at this time.\n\n"
+            "We appreciate the time and effort you invested and "
+            "wish you the best in your future opportunities."
+        )
+
+    notification_sent = False
+    notification_error = None
+
+    try:
+        send_candidate_notification(
+            candidate_name=application["candidate_name"],
+            candidate_email=application["email"],
+            position=application["position"],
+            subject=subject,
+            body=body,
+        )
+        notification_sent = True
+
+    except Exception as exc:
+        notification_error = str(exc)
+        print("Final decision notification email failed:", notification_error)
+
     return {
         "message": "Final selection calculated successfully",
 
@@ -249,6 +305,12 @@ def calculate_final_selection(
 
         "selection":
             result.data[0],
+
+        "notification_sent":
+            notification_sent,
+
+        "notification_error":
+            notification_error,
     }
 
 
@@ -620,4 +682,4 @@ def get_final_selection(application_id: str):
             "Final selection not found"
         )
 
-    return result.data
+    return result.data[0]
