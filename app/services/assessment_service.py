@@ -2,6 +2,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
+from app.config import get_settings
 from app.database import get_service_client
 from app.services.assessment_questions import select_questions
 from app.services.assessment_email import send_assessment_email
@@ -168,7 +169,7 @@ def create_assessment(application_id):
     # Candidate assessment URL
     # -----------------------------------------------------
 
-    frontend_url = "https://hrms-frontend-snowy-three.vercel.app"
+    frontend_url = get_settings().frontend_url
 
     assessment_url = (
         f"{frontend_url}/assessment/{raw_token}"
@@ -178,31 +179,27 @@ def create_assessment(application_id):
     # Send assessment email
     # -----------------------------------------------------
 
-    try:
-        send_assessment_email(
-            candidate_name=application["candidate_name"],
-            candidate_email=application["email"],
-            position=application["position"],
-            assessment_url=assessment_url,
-            expires_at=expires_at,
-        )
+    send_assessment_email(
+        candidate_name=application["candidate_name"],
+        candidate_email=application["email"],
+        position=application["position"],
+        assessment_url=assessment_url,
+        expires_at=expires_at,
+    )
 
-    except Exception as e:
-        print("Failed to send assessment email:", str(e))
+    # -----------------------------------------------------
+    # Return
+    # -----------------------------------------------------
 
-        # -----------------------------------------------------
-        # Return
-        # -----------------------------------------------------
-
-        return {
-            "assessment": assessment,
-            "access_token": raw_token,
-            "assessment_url": assessment_url,
-            "expires_at": expires_at,
-            "candidate_name": application["candidate_name"],
-            "candidate_email": application["email"],
-            "position": application["position"],
-        }
+    return {
+        "assessment": assessment,
+        "access_token": raw_token,
+        "assessment_url": assessment_url,
+        "expires_at": expires_at,
+        "candidate_name": application["candidate_name"],
+        "candidate_email": application["email"],
+        "position": application["position"],
+    }
 
 
 # =========================================================
