@@ -23,11 +23,10 @@ class DepartmentUpdate(BaseModel):
 
 # ---------------------------------------------------------------------------
 # List all departments
+# PUBLIC — used by the candidate application form
 # ---------------------------------------------------------------------------
 @router.get("")
-async def list_departments(
-    user: CurrentUser = Depends(require_hr_admin),
-):
+async def list_departments():
     client = get_service_client()
 
     result = (
@@ -42,6 +41,7 @@ async def list_departments(
 
 # ---------------------------------------------------------------------------
 # Get one department
+# HR ADMIN ONLY
 # ---------------------------------------------------------------------------
 @router.get("/{department_id}")
 async def get_department(
@@ -69,6 +69,7 @@ async def get_department(
 
 # ---------------------------------------------------------------------------
 # Create department
+# HR ADMIN ONLY
 # ---------------------------------------------------------------------------
 @router.post("")
 async def create_department(
@@ -77,7 +78,6 @@ async def create_department(
 ):
     client = get_service_client()
 
-    # Check duplicate department name
     existing = (
         client.table("departments")
         .select("department_id")
@@ -107,6 +107,7 @@ async def create_department(
 
 # ---------------------------------------------------------------------------
 # Update department
+# HR ADMIN ONLY
 # ---------------------------------------------------------------------------
 @router.put("/{department_id}")
 async def update_department(
@@ -129,7 +130,6 @@ async def update_department(
             detail="Department not found",
         )
 
-    # Check if another department already has this name
     duplicate = (
         client.table("departments")
         .select("department_id")
@@ -161,6 +161,7 @@ async def update_department(
 
 # ---------------------------------------------------------------------------
 # Delete department
+# HR ADMIN ONLY
 # ---------------------------------------------------------------------------
 @router.delete("/{department_id}")
 async def delete_department(

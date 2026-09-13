@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel ,Field
+from pydantic import BaseModel, Field
 
 from app.auth import CurrentUser, require_hr_admin
 from app.database import get_service_client
@@ -25,10 +25,12 @@ class JobRequirementUpdate(BaseModel):
     preferred_skills: list[str] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# List all job requirements
+# PUBLIC — used by the candidate application form
+# ---------------------------------------------------------------------------
 @router.get("")
-async def list_job_requirements(
-    user: CurrentUser = Depends(require_hr_admin),
-):
+async def list_job_requirements():
     client = get_service_client()
 
     result = (
@@ -42,6 +44,10 @@ async def list_job_requirements(
     return result.data
 
 
+# ---------------------------------------------------------------------------
+# Get one job requirement
+# HR ADMIN ONLY
+# ---------------------------------------------------------------------------
 @router.get("/{requirement_id}")
 async def get_job_requirement(
     requirement_id: str,
@@ -65,6 +71,11 @@ async def get_job_requirement(
 
     return result.data
 
+
+# ---------------------------------------------------------------------------
+# Create job requirement
+# HR ADMIN ONLY
+# ---------------------------------------------------------------------------
 @router.post("")
 async def create_job_requirement(
     payload: JobRequirementCreate,
@@ -72,7 +83,6 @@ async def create_job_requirement(
 ):
     client = get_service_client()
 
-    # Check department exists
     department = (
         client.table("departments")
         .select("department_id, name")
@@ -87,7 +97,6 @@ async def create_job_requirement(
             detail="Department not found",
         )
 
-    # Check duplicate position inside department
     existing = (
         client.table("job_requirements")
         .select("requirement_id")
@@ -118,6 +127,11 @@ async def create_job_requirement(
 
     return result.data[0]
 
+
+# ---------------------------------------------------------------------------
+# Update job requirement
+# HR ADMIN ONLY
+# ---------------------------------------------------------------------------
 @router.put("/{requirement_id}")
 async def update_job_requirement(
     requirement_id: str,
@@ -170,6 +184,11 @@ async def update_job_requirement(
 
     return result.data[0]
 
+
+# ---------------------------------------------------------------------------
+# Delete job requirement
+# HR ADMIN ONLY
+# ---------------------------------------------------------------------------
 @router.delete("/{requirement_id}")
 async def delete_job_requirement(
     requirement_id: str,
