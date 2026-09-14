@@ -67,10 +67,16 @@ async def get_current_user(
     # Look up app-level role from the users table (service client — this is
     # an internal lookup, not exposing the service key to the caller).
     client = get_service_client()
-    result = client.table("users").select("role, mfa_enabled").eq("user_id", user_id).single().execute()
+    result = client.table("users") \
+    .select("role, mfa_enabled") \
+    .eq("user_id", user_id) \
+    .maybe_single() \
+    .execute()
 
     if not result.data:
         raise HTTPException(status_code=403, detail="No HRMS profile for this account")
+
+    
 
     role = result.data["role"]
     mfa_enabled = result.data["mfa_enabled"]
