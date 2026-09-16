@@ -8,6 +8,7 @@ from app.services.assessment_service import (
     get_assessment_by_token,
     submit_assessment,
     get_assessment_result,
+    record_violation,
 )
 
 router = APIRouter(
@@ -151,6 +152,7 @@ async def get_candidate_assessment(
 
 class AssessmentSubmission(BaseModel):
     answers: list[str | None]
+    terminated_reason: str | None = None
 
 
 @router.post("/access/{token}/submit")
@@ -164,6 +166,7 @@ async def submit_candidate_assessment(
         result = submit_assessment(
             token=token,
             answers=submission.answers,
+            terminated_reason=submission.terminated_reason,
         )
 
         return result
@@ -185,3 +188,43 @@ async def submit_candidate_assessment(
             ),
         )
 
+
+# =========================================================
+# CANDIDATE — RECORD PROCTORING VIOLATION
+# =========================================================
+
+class ViolationReport(BaseModel):
+    violation_type: str
+
+
+@router.post("/access/{token}/violation")
+async def report_assessment_violation(
+    token: str,
+    report: ViolationReport,
+):
+
+    try:
+
+        result = record_violation(
+            token=token,
+            violation_type=report.violation_type,
+        )
+
+        return result
+
+    except RuntimeError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to record violation: "
+                f"{str(e)}"
+            ),
+        )

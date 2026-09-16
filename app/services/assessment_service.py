@@ -336,9 +336,19 @@ def get_assessment_by_token(token: str):
 def submit_assessment(
     token: str,
     answers: list[str | None],
+    terminated_reason: str | None = None,
 ):
     """
     Evaluate and submit the candidate assessment.
+
+    terminated_reason is set when this submission is an automatic
+    one triggered by the proctoring system hitting its violation
+    threshold (tab-switch / camera-off / voice-detected), rather
+    than the candidate clicking Submit themselves. In that case the
+    answers array may be shorter than the question list — whatever
+    the candidate had selected at the moment of termination — and
+    is padded with None (counted as unanswered/incorrect) instead
+    of rejecting the submission outright.
     """
 
     client = get_service_client()
@@ -425,9 +435,14 @@ def submit_assessment(
     questions = assessment["questions"]
 
     if len(answers) != len(questions):
-        raise RuntimeError(
-            "Number of answers does not match number of questions"
-        )
+        if terminated_reason is not None:
+            # Forced auto-submit — pad whatever wasn't answered
+            # yet with None rather than rejecting the submission.
+            answers = (answers + [None] * len(questions))[: len(questions)]
+        else:
+            raise RuntimeError(
+                "Number of answers does not match number of questions"
+            )
 
     # -----------------------------------------------------
     # Calculate score
@@ -525,6 +540,7 @@ def submit_assessment(
             "result": result,
             "status": "Completed",
             "completed_at": now.isoformat(),
+            "terminated_reason": terminated_reason,
         })
         .eq(
             "assessment_id",
@@ -589,7 +605,8 @@ def get_assessment_result(application_id: str):
             "result,"
             "status,"
             "expires_at,"
-            "completed_at"
+            "completed_at,"
+            "terminated_reason"
         )
         .eq(
             "application_id",
@@ -608,4 +625,69 @@ def get_assessment_result(application_id: str):
             "No assessment found for this application"
         )
 
-    return result.data[0]
+    assessment = result.data[0]
+
+    violations_result = (
+        client
+        .table("assessment_violations")
+        .select("violation_type,occurred_at")
+        .eq("assessment_id", assessment["assessment_id"])
+        .order("occurred_at")
+        .execute()
+    )
+
+    assessment["violations"] = violations_result.data or []
+
+    return assessment
+
+
+# =========================================================
+# RECORD PROCTORING VIOLATION
+# =========================================================
+
+def record_violation(token: str, violation_type: str):
+    """
+    Logs a single proctoring violation (tab-switch, camera-off, or
+    voice-detected) against the assessment matching this candidate
+    access token, for HR's audit trail. Returns the running count
+    for this assessment so the frontend can decide locally whether
+    the auto-submit threshold has been reached.
+    """
+
+    client = get_service_client()
+
+    token_hash = hashlib.sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+
+    token_result = (
+        client
+        .table("assessment_access_tokens")
+        .select("assessment_id,expires_at")
+        .eq("token_hash", token_hash)
+        .single()
+        .execute()
+    )
+
+    access_token = token_result.data
+
+    if not access_token:
+        raise RuntimeError("Invalid assessment link")
+
+    client.table("assessment_violations").insert({
+        "assessment_id": access_token["assessment_id"],
+        "violation_type": violation_type,
+    }).execute()
+
+    count_result = (
+        client
+        .table("assessment_violations")
+        .select("violation_id", count="exact")
+        .eq("assessment_id", access_token["assessment_id"])
+        .execute()
+    )
+
+    return {
+        "violation_type": violation_type,
+        "total_violations": count_result.count or 0,
+    }
