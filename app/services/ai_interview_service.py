@@ -87,9 +87,43 @@ def normalize_skill(skill):
 def generate_interview_questions(skills):
     """
     Generate interview questions based on candidate skills.
+
+    If no recognized skills are available, use general
+    Software Engineering interview questions.
     """
 
     questions = []
+
+    # -----------------------------------------------------
+    # GENERAL FALLBACK QUESTIONS
+    # -----------------------------------------------------
+
+    GENERAL_INTERVIEW_QUESTIONS = [
+        "Explain the difference between an array and a linked list.",
+        "What are the four main principles of Object-Oriented Programming?",
+        "What is the difference between a stack and a queue?",
+        "What is the difference between a primary key and a foreign key?",
+        "Explain the difference between authentication and authorization.",
+        "What is an API and why is it used in software applications?",
+        "What is the difference between GET and POST HTTP methods?",
+        "What does HTTP status code 404 mean?",
+        "What is the purpose of version control systems such as Git?",
+        "What is the difference between git merge and git rebase?",
+        "What is an exception and how should application errors be handled?",
+        "What is the purpose of database indexing?",
+        "Explain the difference between SQL and NoSQL databases.",
+        "What is REST architecture?",
+        "What is the purpose of input validation in a web application?",
+        "What is time complexity and why is it important?",
+        "Explain the difference between frontend and backend development.",
+        "What is a REST API endpoint?",
+        "What is debugging and how do you approach finding a bug?",
+        "Explain the basic request-response cycle in a web application.",
+    ]
+
+    # -----------------------------------------------------
+    # USE SKILL-BASED QUESTIONS WHEN AVAILABLE
+    # -----------------------------------------------------
 
     for skill in skills or []:
 
@@ -107,9 +141,20 @@ def generate_interview_questions(skills):
                 "question": question,
             })
 
+    # -----------------------------------------------------
+    # FALLBACK WHEN NO RECOGNIZED SKILLS EXIST
+    # -----------------------------------------------------
+
+    if not questions:
+
+        for question in GENERAL_INTERVIEW_QUESTIONS:
+
+            questions.append({
+                "skill": "general",
+                "question": question,
+            })
+
     return questions
-
-
 # =========================================================
 # CREATE AI INTERVIEW
 # =========================================================

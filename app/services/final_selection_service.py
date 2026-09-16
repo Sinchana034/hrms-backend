@@ -73,30 +73,35 @@ def calculate_final_selection(
     # -----------------------------------------------------
 
     evaluation_result = (
-        client
-        .table("ml_evaluations")
-        .select(
-            "matching_score"
-        )
-        .eq(
-            "application_id",
-            application_id
-        )
-        .single()
-        .execute()
+    client
+    .table("ml_evaluations")
+    .select(
+        "matching_score"
+    )
+    .eq(
+        "application_id",
+        application_id
+    )
+    .limit(1)
+    .execute()
+)
+
+    evaluation = (
+        evaluation_result.data[0]
+        if evaluation_result.data
+        else None
     )
 
-    evaluation = evaluation_result.data
-
-    if not evaluation:
-        raise RuntimeError(
-            "Resume ML evaluation not found"
+    if evaluation:
+        resume_score = float(
+            evaluation.get("matching_score") or 0
         )
-
-    resume_score = float(
-        evaluation.get("matching_score") or 0
-    )
-
+    else:
+        # Candidate has no resume / ML evaluation.
+        # Treat the resume component as 0 and
+        # allow the remaining recruitment stages
+        # to determine the final score.
+        resume_score = 0.0
     # -----------------------------------------------------
     # Get Assessment Score
     # -----------------------------------------------------
