@@ -8,7 +8,18 @@ from app.services.assessment_questions import select_questions
 from app.services.assessment_email import send_assessment_email
 
 
+# =========================================================
+# ASSESSMENT SETTINGS
+# =========================================================
+
+# Candidate has 72 hours to OPEN the invitation link.
+# This is NOT the actual exam duration.
 ASSESSMENT_DURATION_HOURS = 72
+
+# Once the candidate starts the assessment,
+# they have 25 minutes to complete it.
+ASSESSMENT_DURATION_MINUTES = 25
+
 PASS_THRESHOLD = 70
 
 
@@ -64,7 +75,9 @@ def create_assessment(application_id):
     application = application_result.data
 
     if not application:
-        raise RuntimeError("Application not found")
+        raise RuntimeError(
+            "Application not found"
+        )
 
     # -----------------------------------------------------
     # Candidate must be shortlisted
@@ -108,13 +121,14 @@ def create_assessment(application_id):
         )
 
     # -----------------------------------------------------
-    # Assessment expiry
+    # Assessment invitation expiry
     # -----------------------------------------------------
 
     now = datetime.now(timezone.utc)
 
-    expires_at = now + timedelta(
-        hours=ASSESSMENT_DURATION_HOURS
+    expires_at = (
+        now
+        + timedelta(hours=ASSESSMENT_DURATION_HOURS)
     )
 
     # -----------------------------------------------------
@@ -211,6 +225,10 @@ def get_assessment_by_token(token: str):
     Get an assessment using the candidate's access token.
 
     Correct answers are never returned.
+
+    The actual exam timer is based on the server-side
+    started_at timestamp and therefore does NOT reset
+    when the candidate refreshes or reopens the page.
     """
 
     client = get_service_client()
@@ -244,7 +262,7 @@ def get_assessment_by_token(token: str):
         )
 
     # -----------------------------------------------------
-    # Check expiry
+    # Check invitation expiry
     # -----------------------------------------------------
 
     expires_at = datetime.fromisoformat(
@@ -291,18 +309,53 @@ def get_assessment_by_token(token: str):
         )
 
     # -----------------------------------------------------
-    # Change Invited → Started
+    # Start assessment / calculate exam deadline
     # -----------------------------------------------------
 
     if assessment["status"] == "Invited":
 
+        # First access starts the 25-minute exam clock.
+        started_at = now
+
+        exam_deadline = (
+            started_at
+            + timedelta(minutes=ASSESSMENT_DURATION_MINUTES)
+        )
+
         client.table("assessments").update({
             "status": "Started",
-            "started_at": now.isoformat(),
+            "started_at": started_at.isoformat(),
         }).eq(
             "assessment_id",
             assessment["assessment_id"]
         ).execute()
+
+    else:
+
+        # Assessment was already started.
+        # NEVER reset the timer.
+        if not assessment.get("started_at"):
+            raise RuntimeError(
+                "Assessment start time is missing"
+            )
+
+        started_at = datetime.fromisoformat(
+            assessment["started_at"].replace("Z", "+00:00")
+        )
+
+        exam_deadline = (
+            started_at
+            + timedelta(minutes=ASSESSMENT_DURATION_MINUTES)
+        )
+
+    # -----------------------------------------------------
+    # Check 25-minute exam deadline
+    # -----------------------------------------------------
+
+    if exam_deadline <= now:
+        raise RuntimeError(
+            "Assessment time has expired"
+        )
 
     # -----------------------------------------------------
     # Return safe questions
@@ -318,15 +371,55 @@ def get_assessment_by_token(token: str):
             "options": question.get("options", []),
         })
 
+    # -----------------------------------------------------
+    # Load saved answers
+    # -----------------------------------------------------
+
+    responses_result = (
+        client
+        .table("assessment_responses")
+        .select("question_index,selected_option")
+        .eq(
+            "assessment_id",
+            assessment["assessment_id"]
+        )
+        .execute()
+    )
+
+    saved_answers = [
+        None
+        for _ in range(assessment["total_questions"])
+    ]
+
+    for response in responses_result.data or []:
+
+        question_index = response.get("question_index")
+
+        if (
+            question_index is not None
+            and 0 <= question_index < len(saved_answers)
+        ):
+            saved_answers[question_index] = (
+                response.get("selected_option")
+            )
+
+    # -----------------------------------------------------
+    # Return assessment
+    # -----------------------------------------------------
+
     return {
-        "assessment_id": assessment["assessment_id"],
-        "position": assessment["position"],
-        "questions": safe_questions,
-        "total_questions": assessment["total_questions"],
-        "pass_threshold": assessment["pass_threshold"],
-        "expires_at": assessment["expires_at"],
-        "status": "Started",
-    }
+    "assessment_id": assessment["assessment_id"],
+    "position": assessment["position"],
+    "questions": safe_questions,
+    "total_questions": assessment["total_questions"],
+    "pass_threshold": assessment["pass_threshold"],
+    "expires_at": assessment["expires_at"],
+    "started_at": started_at.isoformat(),
+    "exam_deadline": exam_deadline.isoformat(),
+    "duration_minutes": ASSESSMENT_DURATION_MINUTES,
+    "saved_answers": saved_answers,
+    "status": "Started",
+}
 
 
 # =========================================================
@@ -341,14 +434,9 @@ def submit_assessment(
     """
     Evaluate and submit the candidate assessment.
 
-    terminated_reason is set when this submission is an automatic
-    one triggered by the proctoring system hitting its violation
-    threshold (tab-switch / camera-off / voice-detected), rather
-    than the candidate clicking Submit themselves. In that case the
-    answers array may be shorter than the question list — whatever
-    the candidate had selected at the moment of termination — and
-    is padded with None (counted as unanswered/incorrect) instead
-    of rejecting the submission outright.
+    terminated_reason is set when the assessment is
+    automatically terminated because of a proctoring
+    violation or because the exam timer expired.
     """
 
     client = get_service_client()
@@ -382,7 +470,7 @@ def submit_assessment(
         )
 
     # -----------------------------------------------------
-    # Check expiry
+    # Check invitation expiry
     # -----------------------------------------------------
 
     expires_at = datetime.fromisoformat(
@@ -429,17 +517,64 @@ def submit_assessment(
         )
 
     # -----------------------------------------------------
+    # Check assessment was started
+    # -----------------------------------------------------
+
+    if not assessment.get("started_at"):
+        raise RuntimeError(
+            "Assessment has not been started"
+        )
+
+    assessment_started_at = datetime.fromisoformat(
+        assessment["started_at"].replace("Z", "+00:00")
+    )
+
+    # -----------------------------------------------------
+    # Calculate 25-minute deadline
+    # -----------------------------------------------------
+
+    exam_deadline = (
+        assessment_started_at
+        + timedelta(minutes=ASSESSMENT_DURATION_MINUTES)
+    )
+
+    # -----------------------------------------------------
+    # Check 25-minute deadline
+    # -----------------------------------------------------
+
+    if exam_deadline <= now:
+
+        # Time expired.
+        # The assessment will be submitted with
+        # whatever answers were available.
+        terminated_reason = (
+            terminated_reason
+            or "time_expired"
+        )
+
+    # -----------------------------------------------------
     # Questions
     # -----------------------------------------------------
 
     questions = assessment["questions"]
 
+    # -----------------------------------------------------
+    # Validate answer count
+    # -----------------------------------------------------
+
     if len(answers) != len(questions):
+
         if terminated_reason is not None:
-            # Forced auto-submit — pad whatever wasn't answered
-            # yet with None rather than rejecting the submission.
-            answers = (answers + [None] * len(questions))[: len(questions)]
+
+            # Automatic submission.
+            # Pad unanswered questions with None.
+            answers = (
+                answers
+                + [None] * len(questions)
+            )[:len(questions)]
+
         else:
+
             raise RuntimeError(
                 "Number of answers does not match number of questions"
             )
@@ -464,14 +599,20 @@ def submit_assessment(
         if is_correct:
             correct_answers += 1
 
+        # -------------------------------------------------
         # Save response
-        client.table("assessment_responses").upsert({
-            "assessment_id": assessment["assessment_id"],
-            "question_index": index,
-            "selected_option": selected_option,
-            "is_correct": is_correct,
-            "locked_at": now.isoformat(),
-        }).execute()
+        # -------------------------------------------------
+
+        client.table("assessment_responses").upsert(
+            {
+                "assessment_id": assessment["assessment_id"],
+                "question_index": index,
+                "selected_option": selected_option,
+                "is_correct": is_correct,
+                "locked_at": now.isoformat(),
+            },
+            on_conflict="assessment_id,question_index",
+        ).execute()
 
     # -----------------------------------------------------
     # Calculate percentage
@@ -480,7 +621,8 @@ def submit_assessment(
     total_questions = len(questions)
 
     score = (
-        correct_answers / total_questions
+        correct_answers
+        / total_questions
     ) * 100
 
     # -----------------------------------------------------
@@ -495,38 +637,6 @@ def submit_assessment(
         result = "Passed"
     else:
         result = "Failed"
-
-    # -----------------------------------------------------
-    # Determine application status
-    # -----------------------------------------------------
-
-    # if result == "Passed":
-    #     new_application_status = "Assessment Passed"
-    # else:
-    #     new_application_status = "Assessment Failed"
-
-    # # -----------------------------------------------------
-    # # Update application
-    # # -----------------------------------------------------
-
-    # application_update = (
-    #     client
-    #     .table("applications")
-    #     .update({
-    #         "current_status": new_application_status
-    #     })
-    #     .eq(
-    #         "application_id",
-    #         assessment["application_id"]
-    #     )
-    #     .execute()
-    # )
-
-    # if not application_update.data:
-    #     raise RuntimeError(
-    #         "Assessment result calculated, "
-    #         "but application status could not be updated"
-    #     )
 
     # -----------------------------------------------------
     # Update assessment
@@ -577,6 +687,7 @@ def submit_assessment(
         "correct_answers": correct_answers,
         "total_questions": total_questions,
         "pass_threshold": pass_threshold,
+        "terminated_reason": terminated_reason,
     }
 
 
@@ -627,16 +738,29 @@ def get_assessment_result(application_id: str):
 
     assessment = result.data[0]
 
+    # -----------------------------------------------------
+    # Get violations
+    # -----------------------------------------------------
+
     violations_result = (
         client
         .table("assessment_violations")
-        .select("violation_type,occurred_at")
-        .eq("assessment_id", assessment["assessment_id"])
-        .order("occurred_at")
+        .select(
+            "violation_type,occurred_at"
+        )
+        .eq(
+            "assessment_id",
+            assessment["assessment_id"]
+        )
+        .order(
+            "occurred_at"
+        )
         .execute()
     )
 
-    assessment["violations"] = violations_result.data or []
+    assessment["violations"] = (
+        violations_result.data or []
+    )
 
     return assessment
 
@@ -645,16 +769,283 @@ def get_assessment_result(application_id: str):
 # RECORD PROCTORING VIOLATION
 # =========================================================
 
-def record_violation(token: str, violation_type: str):
+def record_violation(
+    token: str,
+    violation_type: str,
+):
     """
-    Logs a single proctoring violation (tab-switch, camera-off, or
-    voice-detected) against the assessment matching this candidate
-    access token, for HR's audit trail. Returns the running count
-    for this assessment so the frontend can decide locally whether
-    the auto-submit threshold has been reached.
+    Logs a single proctoring violation against
+    the assessment matching the candidate token.
+
+    Returns the running violation count.
     """
 
     client = get_service_client()
+
+    # -----------------------------------------------------
+    # Hash token
+    # -----------------------------------------------------
+
+    token_hash = hashlib.sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+
+    # -----------------------------------------------------
+    # Find access token
+    # -----------------------------------------------------
+
+    token_result = (
+        client
+        .table("assessment_access_tokens")
+        .select(
+            "assessment_id,expires_at"
+        )
+        .eq(
+            "token_hash",
+            token_hash
+        )
+        .single()
+        .execute()
+    )
+
+    access_token = token_result.data
+
+    if not access_token:
+        raise RuntimeError(
+            "Invalid assessment link"
+        )
+
+    # -----------------------------------------------------
+    # Record violation
+    # -----------------------------------------------------
+
+    client.table(
+        "assessment_violations"
+    ).insert({
+        "assessment_id": access_token["assessment_id"],
+        "violation_type": violation_type,
+    }).execute()
+
+    # -----------------------------------------------------
+    # Count violations
+    # -----------------------------------------------------
+
+    count_result = (
+        client
+        .table("assessment_violations")
+        .select(
+            "violation_id",
+            count="exact"
+        )
+        .eq(
+            "assessment_id",
+            access_token["assessment_id"]
+        )
+        .execute()
+    )
+
+    return {
+        "violation_type": violation_type,
+        "total_violations": (
+            count_result.count or 0
+        ),
+    }
+
+# =========================================================
+# SAVE ASSESSMENT ANSWER
+# =========================================================
+
+def save_assessment_answer(
+    token: str,
+    question_index: int,
+    selected_option: str | None,
+):
+    """
+    Save a candidate's answer while the assessment is in progress.
+
+    This does NOT submit or score the assessment.
+    It only saves the current answer so progress can be
+    restored if the candidate leaves and reopens the link.
+    """
+
+    client = get_service_client()
+
+    # -----------------------------------------------------
+    # Hash token
+    # -----------------------------------------------------
+
+    token_hash = hashlib.sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+
+    # -----------------------------------------------------
+    # Find access token
+    # -----------------------------------------------------
+
+    token_result = (
+        client
+        .table("assessment_access_tokens")
+        .select("*")
+        .eq(
+            "token_hash",
+            token_hash
+        )
+        .single()
+        .execute()
+    )
+
+    access_token = token_result.data
+
+    if not access_token:
+        raise RuntimeError(
+            "Invalid assessment link"
+        )
+
+    # -----------------------------------------------------
+    # Get assessment
+    # -----------------------------------------------------
+
+    assessment_result = (
+        client
+        .table("assessments")
+        .select("*")
+        .eq(
+            "assessment_id",
+            access_token["assessment_id"]
+        )
+        .single()
+        .execute()
+    )
+
+    assessment = assessment_result.data
+
+    if not assessment:
+        raise RuntimeError(
+            "Assessment not found"
+        )
+
+    # -----------------------------------------------------
+    # Check completed
+    # -----------------------------------------------------
+
+    if assessment["status"] == "Completed":
+        raise RuntimeError(
+            "Assessment has already been completed"
+        )
+
+    # -----------------------------------------------------
+    # Check assessment started
+    # -----------------------------------------------------
+
+    if not assessment.get("started_at"):
+        raise RuntimeError(
+            "Assessment has not been started"
+        )
+
+    # -----------------------------------------------------
+    # Check 25-minute deadline
+    # -----------------------------------------------------
+
+    started_at = datetime.fromisoformat(
+        assessment["started_at"].replace("Z", "+00:00")
+    )
+
+    now = datetime.now(timezone.utc)
+
+    exam_deadline = (
+        started_at
+        + timedelta(minutes=ASSESSMENT_DURATION_MINUTES)
+    )
+
+    if exam_deadline <= now:
+        raise RuntimeError(
+            "Assessment time has expired"
+        )
+
+    # -----------------------------------------------------
+    # Validate question index
+    # -----------------------------------------------------
+
+    questions = assessment["questions"]
+
+    if (
+        question_index < 0
+        or question_index >= len(questions)
+    ):
+        raise RuntimeError(
+            "Invalid question index"
+        )
+
+    # -----------------------------------------------------
+    # Validate selected option
+    # -----------------------------------------------------
+
+    question = questions[question_index]
+
+    options = question.get("options", [])
+
+    if (
+        selected_option is not None
+        and selected_option not in options
+    ):
+        raise RuntimeError(
+            "Invalid answer option"
+        )
+
+    # -----------------------------------------------------
+    # Save answer
+    # -----------------------------------------------------
+
+    response_result = (
+        client
+        .table("assessment_responses")
+        .upsert(
+            {
+                "assessment_id": assessment["assessment_id"],
+                "question_index": question_index,
+                "selected_option": selected_option,
+                "is_correct": None,
+                "locked_at": None,
+            },
+            on_conflict="assessment_id,question_index",
+        )
+        .execute()
+    )
+
+    if not response_result.data:
+        raise RuntimeError(
+            "Failed to save assessment answer"
+        )
+
+    return {
+        "message": "Answer saved",
+        "question_index": question_index,
+    }
+
+# =========================================================
+# HANDLE CANDIDATE TAB CLOSE
+# =========================================================
+
+def handle_tab_close(token: str):
+    """
+    Record a candidate closing/leaving the assessment page.
+
+    First close:
+        - Record violation
+        - Keep assessment resumable
+
+    Second close:
+        - Record violation
+        - Automatically submit using saved answers
+        - Assessment becomes Completed
+        - Access link becomes unavailable
+    """
+
+    client = get_service_client()
+
+    # -----------------------------------------------------
+    # Find assessment from token
+    # -----------------------------------------------------
 
     token_hash = hashlib.sha256(
         token.encode("utf-8")
@@ -663,7 +1054,7 @@ def record_violation(token: str, violation_type: str):
     token_result = (
         client
         .table("assessment_access_tokens")
-        .select("assessment_id,expires_at")
+        .select("*")
         .eq("token_hash", token_hash)
         .single()
         .execute()
@@ -674,20 +1065,137 @@ def record_violation(token: str, violation_type: str):
     if not access_token:
         raise RuntimeError("Invalid assessment link")
 
+    # -----------------------------------------------------
+    # Get assessment
+    # -----------------------------------------------------
+
+    assessment_result = (
+        client
+        .table("assessments")
+        .select("*")
+        .eq(
+            "assessment_id",
+            access_token["assessment_id"]
+        )
+        .single()
+        .execute()
+    )
+
+    assessment = assessment_result.data
+
+    if not assessment:
+        raise RuntimeError("Assessment not found")
+
+    # -----------------------------------------------------
+    # Already completed
+    # -----------------------------------------------------
+
+    if assessment["status"] == "Completed":
+        return {
+            "message": "Assessment already completed",
+            "terminated": True,
+            "close_count": 2,
+        }
+
+    # -----------------------------------------------------
+    # Record close violation
+    # -----------------------------------------------------
+
     client.table("assessment_violations").insert({
-        "assessment_id": access_token["assessment_id"],
-        "violation_type": violation_type,
+        "assessment_id": assessment["assessment_id"],
+        "violation_type": "tab_close",
     }).execute()
+
+    # -----------------------------------------------------
+    # Count tab closes ONLY
+    # -----------------------------------------------------
 
     count_result = (
         client
         .table("assessment_violations")
-        .select("violation_id", count="exact")
-        .eq("assessment_id", access_token["assessment_id"])
+        .select(
+            "violation_id",
+            count="exact"
+        )
+        .eq(
+            "assessment_id",
+            assessment["assessment_id"]
+        )
+        .eq(
+            "violation_type",
+            "tab_close"
+        )
         .execute()
     )
 
+    close_count = count_result.count or 0
+
+    # -----------------------------------------------------
+    # FIRST CLOSE
+    # -----------------------------------------------------
+
+    if close_count < 2:
+
+        return {
+            "message": (
+                "Tab close recorded. "
+                "Assessment remains resumable."
+            ),
+            "terminated": False,
+            "close_count": close_count,
+        }
+
+    # -----------------------------------------------------
+    # SECOND CLOSE → TERMINATE
+    # -----------------------------------------------------
+
+    # Get all answers already saved by the candidate.
+    responses_result = (
+        client
+        .table("assessment_responses")
+        .select(
+            "question_index,selected_option"
+        )
+        .eq(
+            "assessment_id",
+            assessment["assessment_id"]
+        )
+        .execute()
+    )
+
+    answers = [
+        None
+        for _ in range(assessment["total_questions"])
+    ]
+
+    for response in responses_result.data or []:
+
+        index = response.get("question_index")
+
+        if (
+            index is not None
+            and 0 <= index < len(answers)
+        ):
+            answers[index] = response.get(
+                "selected_option"
+            )
+
+    # -----------------------------------------------------
+    # Submit assessment
+    # -----------------------------------------------------
+
+    result = submit_assessment(
+        token=token,
+        answers=answers,
+        terminated_reason="tab_close_limit",
+    )
+
     return {
-        "violation_type": violation_type,
-        "total_violations": count_result.count or 0,
+        "message": (
+            "Assessment terminated after "
+            "two tab closes."
+        ),
+        "terminated": True,
+        "close_count": close_count,
+        "result": result,
     }

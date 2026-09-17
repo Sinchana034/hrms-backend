@@ -9,6 +9,8 @@ from app.services.assessment_service import (
     submit_assessment,
     get_assessment_result,
     record_violation,
+    save_assessment_answer,
+    handle_tab_close,
 )
 
 router = APIRouter(
@@ -154,6 +156,10 @@ class AssessmentSubmission(BaseModel):
     answers: list[str | None]
     terminated_reason: str | None = None
 
+class AssessmentAnswer(BaseModel):
+    question_index: int
+    selected_option: str | None = None
+
 
 @router.post("/access/{token}/submit")
 async def submit_candidate_assessment(
@@ -189,6 +195,76 @@ async def submit_candidate_assessment(
         )
 
 
+# =========================================================
+# CANDIDATE — SAVE ASSESSMENT ANSWER
+# =========================================================
+
+@router.post("/access/{token}/answer")
+async def save_candidate_assessment_answer(
+    token: str,
+    answer: AssessmentAnswer,
+):
+
+    try:
+
+        result = save_assessment_answer(
+            token=token,
+            question_index=answer.question_index,
+            selected_option=answer.selected_option,
+        )
+
+        return result
+
+    except RuntimeError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to save assessment answer: "
+                f"{str(e)}"
+            ),
+        )
+
+# =========================================================
+# CANDIDATE — HANDLE TAB CLOSE
+# =========================================================
+
+@router.post("/access/{token}/tab-close")
+async def candidate_tab_close(
+    token: str,
+):
+
+    try:
+
+        result = handle_tab_close(
+            token=token,
+        )
+
+        return result
+
+    except RuntimeError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to handle tab close: "
+                f"{str(e)}"
+            ),
+        )
 # =========================================================
 # CANDIDATE — RECORD PROCTORING VIOLATION
 # =========================================================
